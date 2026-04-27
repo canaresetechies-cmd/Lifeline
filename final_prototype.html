@@ -31,6 +31,20 @@ background:white;padding:10px;border-radius:10px;
 }
 
 .driver-emergency{background:red;color:white}
+
+/* 📍 Location Button */
+#locBtn{
+position:absolute;
+right:15px;
+bottom:100px;
+z-index:1000;
+width:50px;height:50px;
+border:none;border-radius:50%;
+background:white;
+box-shadow:0 2px 10px rgba(0,0,0,0.3);
+font-size:20px;
+cursor:pointer;
+}
 </style>
 </head>
 
@@ -44,6 +58,9 @@ background:white;padding:10px;border-radius:10px;
 
 <div id="map"></div>
 
+<!-- 📍 Live Location Button -->
+<button id="locBtn">📍</button>
+
 <div class="dashboard" id="dash">
 <div id="status">Waiting...</div>
 <div>Distance: <span id="dist">--</span></div>
@@ -56,7 +73,7 @@ background:white;padding:10px;border-radius:10px;
 let map, role, myMarker, ambMarker, routeLine;
 let ambulanceData = null;
 
-// STORAGE SYNC (works across tabs/devices sometimes)
+// STORAGE SYNC
 window.addEventListener("storage", (e)=>{
     if(e.key==="ambulance"){
         ambulanceData = JSON.parse(e.newValue);
@@ -69,18 +86,39 @@ start.style.display="none";
 
 map = L.map('map').setView([12.97,77.59],15);
 
-// SAFE TILE (no 403 error)
-L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png').addTo(map);
+// 🗺️ MAP LAYERS
+const street = L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png');
+
+const terrain = L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg');
+
+const satellite = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png');
+
+// default
+street.addTo(map);
+
+// switch control
+L.control.layers({
+"Street": street,
+"Terrain": terrain,
+"Satellite": satellite
+}).addTo(map);
 
 // markers
 myMarker = L.circleMarker([0,0],{radius:8,color:'blue'}).addTo(map);
 ambMarker = L.circleMarker([0,0],{radius:10,color:'red'}).addTo(map);
 routeLine = L.polyline([],{color:'red'}).addTo(map);
 
+// 📍 Button logic
+document.getElementById("locBtn").onclick = () => {
+    if(myMarker){
+        map.setView(myMarker.getLatLng(), 17, { animate: true });
+    }
+};
+
 startGPS();
 }
 
-// ROUTE (FREE OSRM)
+// ROUTE (OSRM FREE)
 async function getRoute(start,end){
 const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
 
@@ -113,13 +151,13 @@ map.setView(myPos,16);
 
 speed.innerText = Math.round((p.coords.speed||0)*3.6)+" km/h";
 
-// 🚑 ambulance → store location
+// 🚑 ambulance → store
 if(role==="ambulance"){
 localStorage.setItem("ambulance", JSON.stringify({lat,lng}));
 status.innerText="Sending Location";
 }
 
-// 🚗 driver → read location
+// 🚗 driver → read
 if(role==="driver"){
 const data = localStorage.getItem("ambulance");
 if(data){
