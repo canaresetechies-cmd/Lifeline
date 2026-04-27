@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Lifeline Sync - Free Prototype</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Roboto, sans-serif; }
+        #map { height: 100%; width: 100%; position: absolute; z-index: 1; }
+        
+        /* Google Maps Style Recenter Button */
+        .recenter-btn {
+            position: absolute; right: 10px; bottom: 180px; z-index: 1000;
+            background: white; border: none; border-radius: 4px; width: 44px; height: 44px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* Dashboard */
+        .dashboard { 
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); 
+            width: 92%; max-width: 420px; background: white; border-radius: 16px; 
+            z-index: 1000; box-shadow: 0 8px 32px rgba(0,0,0,0.3); padding: 20px; box-sizing: border-box;
+            transition: 0.3s;
+        }
+        
+        /* The 50m Alert Style */
+        .emergency-mode { background: #d32f2f !important; color: white !important; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.03); } 100% { transform: translateX(-50%) scale(1); } }
+
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; text-align: center; }
+        .val { font-size: 1.2rem; font-weight: 800; display: block; }
+        .lbl { font-size: 10px; color: #777; text-transform: uppercase; font-weight: bold; }
+        .emergency-mode .lbl { color: #ffcdd2; }
+
+        .overlay { position: fixed; inset: 0; background: white; z-index: 2000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .m-btn { padding: 18px; margin: 10px; width: 280px; border-radius: 50px; border: none; color: white; font-weight: bold; font-size: 1.1rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div id="startup" class="overlay">
+        <h1 style="color:#1a73e8">LIFELINE SYNC</h1>
+        <button class="m-btn" style="background:#d32f2f" onclick="launch('ambulance')">AMBULANCE MODE</button>
+        <button class="m-btn" style="background:#1a73e8" onclick="launch('driver')">DRIVER MODE</button>
+    </div>
+
+    <button class="recenter-btn" id="btnLoc">
+        <img src="https://fonts.gstatic.com/s/i/googlematerialicons/my_location/v15/24px.svg" width="28">
+    </button>
+    
+    <div id="map"></div>
+
+    <div id="dash" class="dashboard" style="display:none">
+        <div id="status" style="text-align:center; font-weight: 900; letter-spacing: 1px;">SYSTEM ACTIVE</div>
+        <div class="stat-grid">
+            <div><span class="lbl">Dist</span><span id="txt-dist" class="val">--</span></div>
+            <div><span class="lbl">ETA</span><span id="txt-eta" class="val">--</span></div>
+            <div><span class="lbl">Speed</span><span id="txt-speed" class="val">0</span></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue, onDisconnect } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCDeUjN9ckmm9jqL8KFzN4QCFrs0kZ8Hic",
+            authDomain: "emergencyalert-70c67.firebaseapp.com",
+            databaseURL: "https://emergencyalert-70c67-default-rtdb.firebaseio.com",
+            projectId: "emergencyalert-70c67",
+            storageBucket: "emergencyalert-70c67.firebasestorage.app",
+            messagingSenderId: "389774491851",
+            appId: "1:389774491851:web:8eca46dbf667f1485a1b4e",
+            measurementId: "G-TYGQWZ3RRT"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const myID = "DEV_" + Math.floor(Math.random()*900 + 100);
+
+        let map, role, myMarker, otherMarker;
+
+        window.launch = (r) => {
+            role = r;
+            document.getElementById('startup').style.display = 'none';
+            document.getElementById('dash').style.display = 'block';
+
+            // Init Leaflet Map
+            map = L.map('map', { zoomControl: false }).setView([12.97, 77.59], 16);
+            
+            // Standard Street Map (Free)
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+            // Satellite Layer (Optional free alternative via Esri)
+            const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
+            
+            // Add Satellite Toggle Control
+            L.control.layers({ "Street": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'), "Satellite": satellite }).addTo(map);
+
+            myMarker = L.circleMarker([0,0], { radius: 9, color: 'white', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(map);
+            otherMarker = L.circleMarker([0,0], { radius: 11, color: 'white', weight: 3, fillColor: '#d32f2f', fillOpacity: 1 }).addTo(map);
+
+            document.getElementById('btnLoc').onclick = () => {
+                map.setView(myMarker.getLatLng(), 18);
+            };
+
+            startTracking();
+        };
+
+        function startTracking() {
+            navigator.geolocation.watchPosition((p) => {
+                const lat = p.coords.latitude;
+                const lng = p.coords.longitude;
+                const speed = Math.round((p.coords.speed || 0) * 3.6);
+                
+                myMarker.setLatLng([lat, lng]);
+                document.getElementById('txt-speed').innerText = speed + "km/h";
+
+                const myPath = (role === 'ambulance' ? 'ambulances/' : 'drivers/') + myID;
+                set(ref(db, myPath), { lat, lng, ts: Date.now() });
+                onDisconnect(ref(db, myPath)).remove();
+
+                onValue(ref(db, role === 'ambulance' ? 'drivers/' : 'ambulances/'), (snap) => {
+                    const data = snap.val();
+                    if(!data) return;
+
+                    let closest = null, minD = Infinity;
+                    for(let id in data) {
+                        if(Date.now() - data[id].ts > 15000) continue;
+                        const dist = map.distance([lat, lng], [data[id].lat, data[id].lng]);
+                        if(dist < minD) { minD = dist; closest = data[id]; }
+                    }
+
+                    if(closest) {
+                        otherMarker.setLatLng([closest.lat, closest.lng]);
+                        updateStats(dist);
+                    }
+                });
+            }, null, { enableHighAccuracy: true });
+        }
+
+        function updateStats(dist) {
+            document.getElementById('txt-dist').innerText = Math.round(dist) + "m";
+            
+            // ETA Calculation (Approximate based on average city speed of 30km/h)
+            const etaMinutes = Math.ceil(dist / 500); 
+            document.getElementById('txt-eta').innerText = etaMinutes + " min";
+
+            // 50 METER ALERT LOGIC
+            if (dist <= 50) {
+                document.getElementById('dash').classList.add('emergency-mode');
+                document.getElementById('status').innerText = "⚠️ EMERGENCY: CLEAR PATH ⚠️";
+                
+                // Audio Alert for Driver
+                if(role === 'driver' && !window.isAlerting) {
+                    window.isAlerting = true;
+                    const msg = new SpeechSynthesisUtterance("Ambulance within 50 meters. Move aside.");
+                    window.speechSynthesis.speak(msg);
+                    setTimeout(() => window.isAlerting = false, 10000);
+                }
+            } else {
+                document.getElementById('dash').classList.remove('emergency-mode');
+                document.getElementById('status').innerText = "MONITORING SURROUNDINGS";
+            }
+        }
+    </script>
+</body>
+</html>
