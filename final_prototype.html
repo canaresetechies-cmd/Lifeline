@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Lifeline Sync - Final Fix</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDiMLRwx1mOjBk9-2Kg-lMr0Wm5rfzjwMw&libraries=geometry,directions"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        #map { height: 100%; width: 100%; position: absolute; z-index: 1; }
+        
+        /* High-Visibility UI Elements */
+        .my-location-btn {
+            position: absolute; right: 10px; bottom: 120px; z-index: 10;
+            background: white; border: none; border-radius: 50%; width: 50px; height: 50px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3); cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .my-location-btn:active { background: #eee; }
+
+        .dashboard { 
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); 
+            width: 90%; max-width: 400px; background: white; border-radius: 16px; 
+            z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.4); padding: 20px; text-align: center;
+        }
+        .alert-red { background: #d32f2f !important; color: white !important; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+
+        .setup-screen { position: fixed; inset: 0; background: white; z-index: 2000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .mode-btn { padding: 20px; margin: 10px; width: 280px; border-radius: 50px; border: none; color: white; font-weight: bold; font-size: 1.1rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div id="setup" class="setup-screen">
+        <h1 style="color:#1a73e8; margin-bottom: 30px;">LIFELINE SYNC</h1>
+        <button class="mode-btn" style="background:#d32f2f" onclick="init('ambulance')">I AM AMBULANCE</button>
+        <button class="mode-btn" style="background:#1a73e8" onclick="init('driver')">I AM DRIVER</button>
+        <p id="error-log" style="color: red; font-size: 12px; margin-top: 20px;"></p>
+    </div>
+
+    <button class="my-location-btn" id="recenter">
+        <img src="https://fonts.gstatic.com/s/i/googlematerialicons/my_location/v15/24px.svg" width="28">
+    </button>
+
+    <div id="map"></div>
+
+    <div id="dash" class="dashboard" style="display:none">
+        <div id="status" style="font-weight: 800; font-size: 1.2rem;">Searching for Units...</div>
+        <div style="display: flex; justify-content: space-around; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+            <div><small style="color:#888">DIST</small><br><b id="txt-dist">--</b></div>
+            <div><small style="color:#888">ETA</small><br><b id="txt-eta">--</b></div>
+            <div><small style="color:#888">SPEED</small><br><b id="txt-speed">0</b></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+           const firebaseConfig = {
+            apiKey: "AIzaSyCDeUjN9ckmm9jqL8KFzN4QCFrs0kZ8Hic",
+            databaseURL: "https://emergencyalert-70c67-default-rtdb.firebaseio.com",
+            projectId: "emergencyalert-70c67",
+        };
+        const myID = "UNIT_" + Math.floor(Math.random()*10000);
+        let map, role, myMarker, otherMarker, directionsRenderer, directionsService;
+
+        window.init = (r) => {
+            role = r;
+            document.getElementById('setup').style.display = 'none';
+            document.getElementById('dash').style.display = 'block';
+
+            map = new google.maps.Map(document.getElementById("map"), {
+                zoom: 17, center: {lat: 0, lng: 0}, disableDefaultUI: true, mapTypeControl: true
+            });
+
+            directionsRenderer = new google.maps.DirectionsRenderer({
+                map: map, suppressMarkers: true, polylineOptions: { strokeColor: "#d32f2f", strokeWeight: 8 }
+            });
+            directionsService = new google.maps.DirectionsService();
+
+            myMarker = new google.maps.Marker({ map: map, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: "#1a73e8", fillOpacity: 1, strokeColor: "white", strokeWeight: 3 }});
+            otherMarker = new google.maps.Marker({ map: map, visible: false, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 11, fillColor: "#d32f2f", fillOpacity: 1, strokeColor: "white", strokeWeight: 3 }});
+
+            document.getElementById('recenter').onclick = () => map.panTo(myMarker.getPosition());
+
+            startTracking();
+        };
+
+        function startTracking() {
+            if (!navigator.geolocation) { alert("GPS not supported on this device."); return; }
+
+            navigator.geolocation.watchPosition((p) => {
+                const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+                myMarker.setPosition(pos);
+                document.getElementById('txt-speed').innerText = Math.round((p.coords.speed || 0) * 3.6) + " km/h";
+
+                // Update Firebase with Heartbeat
+                const path = (role === 'ambulance' ? 'ambulances/' : 'drivers/') + myID;
+                const myRef = ref(db, path);
+                set(myRef, { lat: pos.lat, lng: pos.lng, lastActive: Date.now() });
+                onDisconnect(myRef).remove();
+
+                // Look for the Other Side
+                const targetPath = role === 'ambulance' ? 'drivers/' : 'ambulances/';
+                onValue(ref(db, targetPath), (snap) => {
+                    const data = snap.val();
+                    if (!data) { 
+                        otherMarker.setVisible(false); 
+                        directionsRenderer.setDirections({routes: []});
+                        document.getElementById('status').innerText = "Scanning Area...";
+                        return; 
+                    }
+
+                    let closest = null, minD = Infinity;
+                    const now = Date.now();
+
+                    for (let id in data) {
+                        // HEARTBEAT CHECK: Only alert if unit was active in last 15 seconds
+                        if (now - data[id].lastActive > 15000) continue; 
+
+                        const d = google.maps.geometry.spherical.computeDistanceBetween(
+                            new google.maps.LatLng(pos.lat, pos.lng), 
+                            new google.maps.LatLng(data[id].lat, data[id].lng)
+                        );
+                        if (d < minD) { minD = d; closest = data[id]; }
+                    }
+
+                    if (closest) {
+                        otherMarker.setPosition({lat: closest.lat, lng: closest.lng});
+                        otherMarker.setVisible(true);
+                        runNav(pos, closest, minD);
+                    } else {
+                        otherMarker.setVisible(false);
+                    }
+                });
+            }, (e) => { alert("Location Error: " + e.message + ". Check HTTPS and permissions."); }, { enableHighAccuracy: true });
+        }
+
+        function runNav(me, target, dist) {
+            document.getElementById('txt-dist').innerText = Math.round(dist) + "m";
+            
+            if (dist <= 50) {
+                document.getElementById('dash').classList.add('alert-red');
+                document.getElementById('status').innerText = "⚠️ EMERGENCY NEARBY ⚠️";
+                if (role === 'driver' && !window.spoken) { 
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Ambulance within 50 meters. Move aside."));
+                    window.spoken = true; setTimeout(() => window.spoken = false, 10000);
+                }
+            } else {
+                document.getElementById('dash').classList.remove('alert-red');
+                document.getElementById('status').innerText = "Live Tracking Active";
+            }
+
+            directionsService.route({ origin: me, destination: target, travelMode: 'DRIVING' }, (res, status) => {
+                if (status === 'OK') {
+                    directionsRenderer.setDirections(res);
+                    document.getElementById('txt-eta').innerText = res.routes[0].legs[0].duration.text;
+                }
+            });
+        }
+    </script>
+</body>
+</html>
