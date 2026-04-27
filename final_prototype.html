@@ -1,125 +1,151 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Lifeline Sync - Final Fix</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Lifeline Sync - Service Fix</title>
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDiMLRwx1mOjBk9-2Kg-lMr0Wm5rfzjwMw&libraries=geometry,directions"></script>
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        body, html { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #fff; }
         #map { height: 100%; width: 100%; position: absolute; z-index: 1; }
         
-        /* High-Visibility UI Elements */
-        .my-location-btn {
-            position: absolute; right: 10px; bottom: 120px; z-index: 10;
-            background: white; border: none; border-radius: 50%; width: 50px; height: 50px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3); cursor: pointer; display: flex; align-items: center; justify-content: center;
-        }
-        .my-location-btn:active { background: #eee; }
-
-        .dashboard { 
+        /* The Dashboard */
+        .nav-panel { 
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); 
-            width: 90%; max-width: 400px; background: white; border-radius: 16px; 
-            z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.4); padding: 20px; text-align: center;
+            width: 92%; max-width: 440px; background: white; border-radius: 16px; 
+            z-index: 100; box-shadow: 0 10px 40px rgba(0,0,0,0.3); padding: 20px; box-sizing: border-box;
         }
-        .alert-red { background: #d32f2f !important; color: white !important; animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+        .emergency-active { background: #d32f2f !important; color: white !important; transition: 0.3s; }
+        
+        .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; text-align: center; }
+        .val { font-size: 20px; font-weight: 800; display: block; }
+        .lbl { font-size: 10px; color: #777; text-transform: uppercase; }
 
-        .setup-screen { position: fixed; inset: 0; background: white; z-index: 2000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        .mode-btn { padding: 20px; margin: 10px; width: 280px; border-radius: 50px; border: none; color: white; font-weight: bold; font-size: 1.1rem; cursor: pointer; }
+        /* Custom My Location Button */
+        .recenter-btn {
+            position: absolute; right: 12px; bottom: 140px; z-index: 10;
+            background: white; border: none; border-radius: 4px; width: 40px; height: 40px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.3); cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+
+        .splash { position: fixed; inset: 0; background: #fff; z-index: 2000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .btn { padding: 18px; margin: 10px; width: 260px; border-radius: 50px; border: none; color: white; font-weight: bold; cursor: pointer; font-size: 16px; }
+        
+        /* Service Status Light */
+        #service-light { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: gray; margin-right: 5px; }
     </style>
 </head>
 <body>
 
-    <div id="setup" class="setup-screen">
-        <h1 style="color:#1a73e8; margin-bottom: 30px;">LIFELINE SYNC</h1>
-        <button class="mode-btn" style="background:#d32f2f" onclick="init('ambulance')">I AM AMBULANCE</button>
-        <button class="mode-btn" style="background:#1a73e8" onclick="init('driver')">I AM DRIVER</button>
-        <p id="error-log" style="color: red; font-size: 12px; margin-top: 20px;"></p>
+    <div id="setup" class="splash">
+        <h1 style="color:#1a73e8; margin-bottom: 40px;">LIFELINE SYNC</h1>
+        <button class="btn" style="background:#d32f2f" onclick="startApp('ambulance')">AMBULANCE MODE</button>
+        <button class="btn" style="background:#1a73e8" onclick="startApp('driver')">DRIVER MODE</button>
+        <p style="font-size: 12px; color: #999; margin-top: 20px;">Ensure GPS is ON and you are using HTTPS</p>
     </div>
 
-    <button class="my-location-btn" id="recenter">
-        <img src="https://fonts.gstatic.com/s/i/googlematerialicons/my_location/v15/24px.svg" width="28">
+    <button class="recenter-btn" id="locBtn">
+        <img src="https://fonts.gstatic.com/s/i/googlematerialicons/my_location/v15/24px.svg" width="24">
     </button>
 
     <div id="map"></div>
 
-    <div id="dash" class="dashboard" style="display:none">
-        <div id="status" style="font-weight: 800; font-size: 1.2rem;">Searching for Units...</div>
-        <div style="display: flex; justify-content: space-around; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-            <div><small style="color:#888">DIST</small><br><b id="txt-dist">--</b></div>
-            <div><small style="color:#888">ETA</small><br><b id="txt-eta">--</b></div>
-            <div><small style="color:#888">SPEED</small><br><b id="txt-speed">0</b></div>
+    <div id="dash" class="nav-panel" style="display:none">
+        <div style="text-align:center; font-weight: bold;">
+            <span id="service-light"></span>
+            <span id="status-msg">Connecting to Satellite...</span>
+        </div>
+        <div class="grid">
+            <div><span class="lbl">Distance</span><span id="d-dist" class="val">--</span></div>
+            <div><span class="lbl">ETA</span><span id="d-eta" class="val">--</span></div>
+            <div><span class="lbl">Speed</span><span id="d-speed" class="val">0</span></div>
         </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, set, onValue, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, set, onValue, onDisconnect } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-           const firebaseConfig = {
-            apiKey: "AIzaSyCDeUjN9ckmm9jqL8KFzN4QCFrs0kZ8Hic",
-            databaseURL: "https://emergencyalert-70c67-default-rtdb.firebaseio.com",
-            projectId: "emergencyalert-70c67",
-        };
-        const myID = "UNIT_" + Math.floor(Math.random()*10000);
-        let map, role, myMarker, otherMarker, directionsRenderer, directionsService;
+        // FIREBASE SETUP - Replace these with your actual keys
+       const firebaseConfig = {
+  apiKey: "AIzaSyCDeUjN9ckmm9jqL8KFzN4QCFrs0kZ8Hic",
+  authDomain: "emergencyalert-70c67.firebaseapp.com",
+  databaseURL: "https://emergencyalert-70c67-default-rtdb.firebaseio.com",
+  projectId: "emergencyalert-70c67",
+  storageBucket: "emergencyalert-70c67.firebasestorage.app",
+  messagingSenderId: "389774491851",
+  appId: "1:389774491851:web:8eca46dbf667f1485a1b4e",
+  measurementId: "G-TYGQWZ3RRT"
+};
 
-        window.init = (r) => {
-            role = r;
+        let map, role, myMarker, otherMarker, directionsService, directionsRenderer;
+
+        window.startApp = (selectedRole) => {
+            role = selectedRole;
             document.getElementById('setup').style.display = 'none';
             document.getElementById('dash').style.display = 'block';
 
             map = new google.maps.Map(document.getElementById("map"), {
-                zoom: 17, center: {lat: 0, lng: 0}, disableDefaultUI: true, mapTypeControl: true
+                zoom: 17, center: {lat: 12.9716, lng: 77.5946},
+                disableDefaultUI: true, mapTypeControl: true,
+                styles: [{ featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] }]
             });
 
-            directionsRenderer = new google.maps.DirectionsRenderer({
-                map: map, suppressMarkers: true, polylineOptions: { strokeColor: "#d32f2f", strokeWeight: 8 }
-            });
             directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer({
+                map: map, suppressMarkers: true,
+                polylineOptions: { strokeColor: "#D32F2F", strokeWeight: 7 }
+            });
 
-            myMarker = new google.maps.Marker({ map: map, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: "#1a73e8", fillOpacity: 1, strokeColor: "white", strokeWeight: 3 }});
-            otherMarker = new google.maps.Marker({ map: map, visible: false, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 11, fillColor: "#d32f2f", fillOpacity: 1, strokeColor: "white", strokeWeight: 3 }});
+            myMarker = new google.maps.Marker({
+                map: map, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: "#1a73e8", fillOpacity: 1, strokeColor: "white", strokeWeight: 2 }
+            });
 
-            document.getElementById('recenter').onclick = () => map.panTo(myMarker.getPosition());
+            otherMarker = new google.maps.Marker({
+                map: map, visible: false, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 10, fillColor: "#d32f2f", fillOpacity: 1, strokeColor: "white", strokeWeight: 2 }
+            });
 
-            startTracking();
+            document.getElementById('locBtn').onclick = () => {
+                if (myMarker.getPosition()) map.panTo(myMarker.getPosition());
+            };
+
+            trackService();
         };
 
-        function startTracking() {
-            if (!navigator.geolocation) { alert("GPS not supported on this device."); return; }
+        function trackService() {
+            if (!navigator.geolocation) {
+                updateStatus("GPS Not Supported", "red");
+                return;
+            }
 
             navigator.geolocation.watchPosition((p) => {
                 const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
                 myMarker.setPosition(pos);
-                document.getElementById('txt-speed').innerText = Math.round((p.coords.speed || 0) * 3.6) + " km/h";
+                updateStatus("Service Running", "#4CAF50");
+                document.getElementById('d-speed').innerText = Math.round((p.coords.speed || 0) * 3.6) + " km/h";
 
-                // Update Firebase with Heartbeat
+                // Sync to Cloud
                 const path = (role === 'ambulance' ? 'ambulances/' : 'drivers/') + myID;
-                const myRef = ref(db, path);
-                set(myRef, { lat: pos.lat, lng: pos.lng, lastActive: Date.now() });
-                onDisconnect(myRef).remove();
+                const userRef = ref(db, path);
+                set(userRef, { lat: pos.lat, lng: pos.lng, active: Date.now() });
+                onDisconnect(userRef).remove();
 
-                // Look for the Other Side
+                // Listen for target
                 const targetPath = role === 'ambulance' ? 'drivers/' : 'ambulances/';
                 onValue(ref(db, targetPath), (snap) => {
                     const data = snap.val();
-                    if (!data) { 
-                        otherMarker.setVisible(false); 
+                    if (!data) {
+                        otherMarker.setVisible(false);
                         directionsRenderer.setDirections({routes: []});
-                        document.getElementById('status').innerText = "Scanning Area...";
-                        return; 
+                        return;
                     }
 
                     let closest = null, minD = Infinity;
                     const now = Date.now();
-
                     for (let id in data) {
-                        // HEARTBEAT CHECK: Only alert if unit was active in last 15 seconds
-                        if (now - data[id].lastActive > 15000) continue; 
-
+                        if (now - data[id].active > 30000) continue; // Cleanup old data
                         const d = google.maps.geometry.spherical.computeDistanceBetween(
-                            new google.maps.LatLng(pos.lat, pos.lng), 
+                            new google.maps.LatLng(pos.lat, pos.lng),
                             new google.maps.LatLng(data[id].lat, data[id].lng)
                         );
                         if (d < minD) { minD = d; closest = data[id]; }
@@ -128,35 +154,40 @@
                     if (closest) {
                         otherMarker.setPosition({lat: closest.lat, lng: closest.lng});
                         otherMarker.setVisible(true);
-                        runNav(pos, closest, minD);
-                    } else {
-                        otherMarker.setVisible(false);
+                        runNavigation(pos, closest, minD);
                     }
                 });
-            }, (e) => { alert("Location Error: " + e.message + ". Check HTTPS and permissions."); }, { enableHighAccuracy: true });
+
+            }, (err) => {
+                updateStatus("Location Blocked (HTTPS?)", "red");
+            }, { enableHighAccuracy: true });
         }
 
-        function runNav(me, target, dist) {
-            document.getElementById('txt-dist').innerText = Math.round(dist) + "m";
+        function runNavigation(origin, dest, distance) {
+            document.getElementById('d-dist').innerText = Math.round(distance) + "m";
             
-            if (dist <= 50) {
-                document.getElementById('dash').classList.add('alert-red');
-                document.getElementById('status').innerText = "⚠️ EMERGENCY NEARBY ⚠️";
-                if (role === 'driver' && !window.spoken) { 
-                    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Ambulance within 50 meters. Move aside."));
-                    window.spoken = true; setTimeout(() => window.spoken = false, 10000);
-                }
+            if (distance <= 50) {
+                document.getElementById('dash').classList.add('emergency-active');
+                document.getElementById('status-msg').innerText = "⚠️ AMBULANCE NEARBY ⚠️";
             } else {
-                document.getElementById('dash').classList.remove('alert-red');
-                document.getElementById('status').innerText = "Live Tracking Active";
+                document.getElementById('dash').classList.remove('emergency-active');
+                document.getElementById('status-msg').innerText = "Service Running";
             }
 
-            directionsService.route({ origin: me, destination: target, travelMode: 'DRIVING' }, (res, status) => {
+            directionsService.route({
+                origin: origin, destination: {lat: dest.lat, lng: dest.lng},
+                travelMode: 'DRIVING'
+            }, (res, status) => {
                 if (status === 'OK') {
                     directionsRenderer.setDirections(res);
-                    document.getElementById('txt-eta').innerText = res.routes[0].legs[0].duration.text;
+                    document.getElementById('d-eta').innerText = res.routes[0].legs[0].duration.text;
                 }
             });
+        }
+
+        function updateStatus(txt, color) {
+            document.getElementById('status-msg').innerText = txt;
+            document.getElementById('service-light').style.background = color;
         }
     </script>
 </body>
